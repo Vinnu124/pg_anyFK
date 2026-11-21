@@ -1,0 +1,6 @@
+comment = 'Foreign keys for the elements of an array column'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_anyfk'
+relocatable = false
+superuser = true
+trusted = false
