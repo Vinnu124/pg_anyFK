@@ -1,0 +1,11 @@
+[package]
+name = "pg_anyfk_core"
+description = "Parsing and validation logic for pg_anyfk. No Postgres dependency."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
