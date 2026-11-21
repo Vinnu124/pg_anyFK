@@ -1,0 +1,4 @@
+# Postgres symbols resolve at run time, after the backend dlopen's us.
+# Without this, linking fails on macOS.
+[target.'cfg(target_os="macos")']
+rustflags = ["-Clink-arg=-Wl,-undefined,dynamic_lookup"]
