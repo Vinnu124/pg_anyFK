@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  PGRX_VERSION: 0.19.3
+
+jobs:
+  # No Postgres needed, so this fails in about a minute when the logic breaks.
+  core:
+    name: core (fmt, clippy, unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy -p pg_anyfk_core --all-targets -- -D warnings
+      - run: cargo test -p pg_anyfk_core
+
+  ext:
+    name: ext (pg${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17, 18]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Postgres ${{ matrix.pg }} from PGDG
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-${{ matrix.pg }} \
+            postgresql-server-dev-${{ matrix.pg }} \
+            build-essential libreadline-dev zlib1g-dev flex bison \
+            libssl-dev libclang-dev clang pkg-config libicu-dev
+
+      - name: Let the runner user install the extension
+        run: |
+          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          sudo chmod a+w "$($PG_CONFIG --pkglibdir)"
+          sudo chmod a+w "$($PG_CONFIG --sharedir)/extension"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-pgrx
+        run: cargo install --locked cargo-pgrx@${{ env.PGRX_VERSION }}
+
+      - name: cargo pgrx init
+        run: |
+          cargo pgrx init \
+            --pg${{ matrix.pg }} /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+
+      - name: clippy
+        working-directory: ext
+        run: |
+          cargo clippy --all-targets \
+            --no-default-features --features pg${{ matrix.pg }} -- -D warnings
+
+      - name: cargo pgrx test
+        working-directory: ext
+        run: cargo pgrx test pg${{ matrix.pg }}
+
+      # Proving the parent row lock works needs two sessions at once, which
+      # #[pg_test] cannot provide.
+      - name: concurrency tests
+        run: ./scripts/race_test.sh ${{ matrix.pg }}
