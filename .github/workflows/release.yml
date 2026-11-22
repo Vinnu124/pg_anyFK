@@ -1,0 +1,134 @@
+name: Release
+
+# Pushing a v* tag builds one tarball per Postgres major and attaches them all to
+# a GitHub release. CI already covers correctness; this only packages.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  PGRX_VERSION: 0.19.3
+
+jobs:
+  build:
+    name: package (pg${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17, 18]
+    steps:
+      - uses: actions/checkout@v4
+
+      # pgrx stamps the crate version into pg_anyfk.control and the SQL filename.
+      # A tarball named v0.2.0 holding pg_anyfk--0.1.0.sql installs under the old
+      # version and confuses everyone, so refuse the mismatch up front.
+      - name: Tag must match the crate version
+        run: |
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          tag=${GITHUB_REF_NAME#v}
+          if [ "$crate" != "$tag" ]; then
+            echo "tag $GITHUB_REF_NAME implies $tag, Cargo.toml says $crate"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Postgres ${{ matrix.pg }} from PGDG
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates gnupg lsb-release
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y \
+            postgresql-${{ matrix.pg }} \
+            postgresql-server-dev-${{ matrix.pg }} \
+            build-essential libreadline-dev zlib1g-dev flex bison \
+            libssl-dev libclang-dev clang pkg-config libicu-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Cache cargo-pgrx
+        id: pgrx-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}
+
+      - name: Install cargo-pgrx
+        if: steps.pgrx-bin.outputs.cache-hit != 'true'
+        run: cargo install --locked cargo-pgrx@${{ env.PGRX_VERSION }}
+
+      - name: cargo pgrx init
+        run: |
+          cargo pgrx init \
+            --pg${{ matrix.pg }} /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+
+      # Writes a tree mirroring the install prefix: usr/lib/postgresql/NN/lib for
+      # the shared library, usr/share/postgresql/NN/extension for the control and
+      # SQL files. Tarring that whole tree means installing is one untar at /.
+      - name: Package
+        working-directory: ext
+        run: |
+          cargo pgrx package \
+            --no-default-features --features pg${{ matrix.pg }} \
+            --pg-config /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config \
+            --out-dir "$GITHUB_WORKSPACE/pkg"
+
+      - name: Tarball
+        run: |
+          name="pg_anyfk-${GITHUB_REF_NAME}-pg${{ matrix.pg }}-linux-amd64.tar.gz"
+          tar -C pkg -czf "$name" .
+          sha256sum "$name" > "$name.sha256"
+          tar -tzf "$name"   # the log should show usr/lib and usr/share paths
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pg${{ matrix.pg }}
+          path: pg_anyfk-*.tar.gz*
+          if-no-files-found: error
+
+  release:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(cat <<'EOF'
+          Prebuilt for Linux x86_64, one tarball per Postgres major. Pick the one
+          matching your server, then:
+
+          ```sh
+          tar -tzf pg_anyfk-*-pgNN-linux-amd64.tar.gz      # check what it holds
+          sudo tar -C / -xzf pg_anyfk-*-pgNN-linux-amd64.tar.gz
+          ```
+
+          ```sql
+          CREATE EXTENSION pg_anyfk;
+          ```
+
+          Built against the PGDG packages on Ubuntu 24.04. On an older distro, or
+          on macOS, build from source instead: see the README.
+          EOF
+          )
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --notes "$notes" \
+            --generate-notes
