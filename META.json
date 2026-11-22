@@ -1,0 +1,47 @@
+{
+   "name": "pg_anyfk",
+   "abstract": "Foreign keys for the elements of an array column",
+   "description": "Postgres has no syntax for constraining the values inside an array column: a FOREIGN KEY constrains the whole column value, not the elements. pg_anyfk enforces the reference, rejecting elements with no matching parent row and protecting the referenced row from deletion, with an on_delete mode that either refuses the delete or removes the key from every array holding it.",
+   "version": "0.2.0",
+   "maintainer": [
+      "Vinayak Sandur <vinayaksandur04@gmail.com>"
+   ],
+   "license": "apache_2_0",
+   "provides": {
+      "pg_anyfk": {
+         "abstract": "Foreign keys for the elements of an array column",
+         "file": "ext/pg_anyfk.control",
+         "docfile": "README.md",
+         "version": "0.2.0"
+      }
+   },
+   "prereqs": {
+      "runtime": {
+         "requires": {
+            "PostgreSQL": "15.0.0"
+         }
+      }
+   },
+   "resources": {
+      "bugtracker": {
+         "web": "https://github.com/Vinnu124/pg_anyFK/issues/"
+      },
+      "repository": {
+         "url": "git://github.com/Vinnu124/pg_anyFK.git",
+         "web": "https://github.com/Vinnu124/pg_anyFK/",
+         "type": "git"
+      }
+   },
+   "meta-spec": {
+      "version": "1.0.0",
+      "url": "https://pgxn.org/meta/spec.txt"
+   },
+   "release_status": "testing",
+   "tags": [
+      "foreign key",
+      "array",
+      "referential integrity",
+      "constraint",
+      "rust"
+   ]
+}
