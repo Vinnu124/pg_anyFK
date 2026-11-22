@@ -30,7 +30,7 @@ Usually you should use one. This is not for new schemas, it is for the ones that
 
 ## Install
 
-Postgres 15, 16, 17 or 18. Rust 1.85+ and pgrx 0.19.3 to build.
+Postgres 15, 16, 17 or 18. Rust 1.96+ and pgrx 0.19.3 to build.
 
 ```sh
 cargo install --locked cargo-pgrx@0.19.3

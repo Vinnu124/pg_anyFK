@@ -5,7 +5,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.96"
 license = "Apache-2.0"
 
 # No unwrap()/expect() outside tests: a Rust panic inside a Postgres backend is at
