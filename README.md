@@ -48,7 +48,7 @@ No `shared_preload_libraries` and no restart, so it works on managed Postgres.
 
 | | |
 |---|---|
-| `anyfk.add(child, parent, is_deferrable, validate, conname)` | Add a constraint. Returns its name. |
+| `anyfk.add(child, parent, on_delete, is_deferrable, validate, conname)` | Add a constraint. Returns its name. |
 | `anyfk.violations(child, parent)` | Elements with no matching parent row, worst first. Reads only. |
 | `anyfk.drop_constraint(conname)` | Remove a constraint and its triggers. |
 | `anyfk.constraints` | What is registered. |
@@ -74,13 +74,32 @@ inserted in any order within one transaction. `conname` overrides the generated 
 | Operation | |
 |---|---|
 | `INSERT` or `UPDATE` with an element that has no parent row | rejected |
-| `DELETE` of a referenced parent row | rejected |
+| `DELETE` of a referenced parent row | depends on `on_delete` |
 | `UPDATE` of a referenced key | rejected |
 | `TRUNCATE` of the parent while any array is non-empty | rejected |
 
-Refusing the delete is the only behaviour implemented. The `on_delete` parameter is
-reserved for alternatives, the obvious one being to remove the deleted key from each
-array rather than refuse.
+### `on_delete`
+
+| Mode | |
+|---|---|
+| `restrict` (default) | Refuse the delete while the key is still referenced. |
+| `scrub` | Remove the key from every array holding it, then allow the delete. |
+
+```sql
+SELECT anyfk.add('posts(tag_ids)', 'tags(id)', on_delete => 'scrub');
+```
+
+Under `scrub` a delete rewrites the arrays rather than refusing. An array holding
+the deleted key loses that one element; the row itself is left alone.
+
+There is no `cascade`. It would have to mean either "delete the referencing row" or
+"remove the element", and for arrays those are wildly different: a post should not
+disappear because one of its tags did. That ambiguity is what stalled the feature in
+core, so the useful half is called `scrub` and the confusing word is not used.
+
+Two things to know about `scrub`. It applies to `DELETE` only, so updating a
+referenced key is still refused. And it runs as whoever ran the delete, so that role
+needs `UPDATE` on the referencing table.
 
 `NULL` arrays, empty arrays and `NULL` elements pass, matching `MATCH SIMPLE` on a
 native foreign key. Duplicate elements are fine. `TRUNCATE parent, child` together is
