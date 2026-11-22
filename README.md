@@ -128,5 +128,4 @@ cargo pgrx run pg18              # psql against a scratch instance
 `cargo pgrx run` reuses its database and will not re-run `CREATE EXTENSION`, so after
 changing `ext/sql/`: `DROP EXTENSION pg_anyfk CASCADE; CREATE EXTENSION pg_anyfk;`
 
-`scripts/make_demo.py` regenerates the GIF at the top of this file.
 
