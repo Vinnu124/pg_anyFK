@@ -6,6 +6,7 @@ resolver = "2"
 version = "0.0.1"
 edition = "2021"
 rust-version = "1.85"
+license = "Apache-2.0"
 
 # No unwrap()/expect() outside tests: a Rust panic inside a Postgres backend is at
 # best an ugly error. Crate roots re-allow these under cfg(test).

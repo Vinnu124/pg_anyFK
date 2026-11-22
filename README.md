@@ -1,3 +1,7 @@
+[![CI](https://img.shields.io/github/actions/workflow/status/Vinnu124/pg_anyFK/ci.yml?branch=master&style=flat-square&label=CI&logo=github)](https://github.com/Vinnu124/pg_anyFK/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/Vinnu124/pg_anyFK?style=flat-square&label=release&color=black)](https://github.com/Vinnu124/pg_anyFK/releases)
+[![license](https://img.shields.io/badge/license-Apache--2.0-black?style=flat-square)](LICENSE)
+
 # pg_anyfk
 
 Foreign keys for the elements of an array column.
