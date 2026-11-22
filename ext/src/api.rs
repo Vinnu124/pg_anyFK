@@ -191,6 +191,10 @@ fn version() -> String {
 ///
 /// Both sides are written the way a foreign key reads:
 /// `anyfk.add('posts(tag_ids)', 'tags(id)')`.
+///
+/// `on_delete` is `restrict` (refuse the delete) or `scrub` (remove the key from
+/// every array holding it, then allow it). It governs DELETE only; updating a
+/// referenced key is always refused.
 #[pg_extern(schema = "anyfk")]
 fn add(
     child: &str,
@@ -212,9 +216,9 @@ fn add(
         Ok(m) => m,
         Err(e) => error!("{e}"),
     };
-    if mode != OnDelete::Restrict {
+    if mode == OnDelete::SetNull {
         error!(
-            "on_delete => '{}' is not implemented yet; only 'restrict' is supported",
+            "on_delete => '{}' is not implemented yet; use 'restrict' or 'scrub'",
             mode.as_str()
         );
     }
@@ -318,16 +322,28 @@ fn add(
             .or_pg("creating the triggers");
     });
 
-    // The parent-side delete check needs this to avoid a sequential scan.
+    // The parent-side delete check needs this to avoid a sequential scan. Under
+    // scrub it also drives the rewrite, so the cost of missing it is higher.
     if !has_gin_index(&c) {
         ereport!(
             WARNING,
             PgSqlErrorCode::ERRCODE_WARNING,
             format!("no GIN index on {}.{}.{}", c.schema, c.table, c.column),
             format!(
-                "Deleting from {}.{} will scan {}.{} on every row. \
+                "Deleting from {}.{} will {} {}.{} on every row. \
                  Consider: CREATE INDEX ON {}.{} USING gin ({});",
-                p.schema, p.table, c.schema, c.table, c.schema, c.table, c.column
+                p.schema,
+                p.table,
+                if mode == OnDelete::Scrub {
+                    "scan and rewrite"
+                } else {
+                    "scan"
+                },
+                c.schema,
+                c.table,
+                c.schema,
+                c.table,
+                c.column
             )
         );
     }

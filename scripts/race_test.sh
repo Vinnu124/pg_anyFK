@@ -103,5 +103,43 @@ else
   echo "FAIL deleting tag 71 should not have blocked: $((e-s))s, $out"; fail=1
 fi
 
+# ---------------------------------------------------------------------------
+# scrub rewrites the arrays instead of refusing, so the delete succeeds. The
+# question is whether a concurrent insert can still slip a reference past it.
+fixture_scrub () {
+  "${PSQL[@]}" <<'SQL'
+DROP TABLE IF EXISTS posts, tags CASCADE;
+CREATE EXTENSION IF NOT EXISTS pg_anyfk;
+CREATE TABLE tags (id bigint PRIMARY KEY);
+INSERT INTO tags SELECT g FROM generate_series(1,100) g;
+CREATE TABLE posts (id bigserial PRIMARY KEY, tag_ids bigint[] NOT NULL DEFAULT '{}');
+CREATE INDEX ON posts USING gin (tag_ids);
+SELECT anyfk.add('posts(tag_ids)', 'tags(id)', on_delete => 'scrub');
+SQL
+}
+
+echo
+echo "==> test 4: scrub -- INSERT a reference while that parent is being deleted"
+fixture_scrub >/dev/null
+("${PSQL[@]}" -c "BEGIN; INSERT INTO posts (tag_ids) VALUES ('{50}'); SELECT pg_sleep(6); COMMIT;" >/dev/null 2>&1) &
+sleep 2
+s=$(date +%s)
+# Expect: blocks until the insert commits, then scrubs the row it just created.
+out=$("${PSQL[@]}" -c "DELETE FROM tags WHERE id = 50;" 2>&1 || true)
+e=$(date +%s)
+wait
+check "scrub waits for the concurrent insert, then cleans it up" y $((e-s)) n "$out"
+
+echo
+echo "==> test 5: scrub -- INSERT a reference to a parent already being deleted"
+fixture_scrub >/dev/null
+("${PSQL[@]}" -c "BEGIN; DELETE FROM tags WHERE id = 60; SELECT pg_sleep(6); COMMIT;" >/dev/null 2>&1) &
+sleep 2
+s=$(date +%s)
+out=$("${PSQL[@]}" -c "INSERT INTO posts (tag_ids) VALUES ('{60}');" 2>&1 || true)
+e=$(date +%s)
+wait
+check "pending scrub delete blocks the child insert" y $((e-s)) y "$out"
+
 echo
 if [[ $fail == 0 ]]; then echo "ALL CONCURRENCY TESTS PASSED"; else echo "CONCURRENCY TESTS FAILED"; exit 1; fi

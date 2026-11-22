@@ -112,6 +112,23 @@ BEGIN
         END IF;
     END IF;
 
+    -- scrub: take the key out of every array holding it, then allow the delete.
+    -- DELETE only. An UPDATE of the key falls through and raises below, because
+    -- on_delete says nothing about what an update should do.
+    --
+    -- Runs as the deleting role, which therefore needs UPDATE on the referencing
+    -- table. We do not elevate, since a SECURITY DEFINER trigger that rewrites an
+    -- arbitrary table is an escalation route.
+    IF c.on_delete = 'scrub' AND TG_OP = 'DELETE' THEN
+        EXECUTE format(
+            'UPDATE %s SET %I = array_remove(%I, ($1).%I) '
+            'WHERE %I @> ARRAY[($1).%I]',
+            c.child_rel, c.child_column, c.child_column, c.parent_column,
+            c.child_column, c.parent_column
+        ) USING OLD;
+        RETURN OLD;
+    END IF;
+
     -- `@>` is served by a GIN index on the array column, which is why anyfk.add()
     -- warns when one is missing.
     EXECUTE format(

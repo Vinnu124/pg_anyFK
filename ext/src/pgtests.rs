@@ -252,11 +252,163 @@ pub mod tests {
         run("SELECT anyfk.add('posts(more_ids)', 'tags(id)', on_delete => 'cascade')");
     }
 
-    #[pg_test(error = "on_delete => 'scrub' is not implemented yet; only 'restrict' is supported")]
+    #[pg_test(error = "on_delete => 'set_null' is not implemented yet; use 'restrict' or 'scrub'")]
     fn add_rejects_modes_that_are_not_built_yet() {
         fixture();
         run("ALTER TABLE posts ADD COLUMN more_ids bigint[]");
-        run("SELECT anyfk.add('posts(more_ids)', 'tags(id)', on_delete => 'scrub')");
+        run("SELECT anyfk.add('posts(more_ids)', 'tags(id)', on_delete => 'set_null')");
+    }
+
+    // ----------------------------------------------------------------------- scrub
+
+    /// Same as `fixture()` but with `on_delete => 'scrub'`.
+    fn scrub_fixture() {
+        run("CREATE TABLE tags (id bigint PRIMARY KEY, label text)");
+        run("INSERT INTO tags SELECT g, 'tag'||g FROM generate_series(1,10) g");
+        run("CREATE TABLE posts (id bigserial PRIMARY KEY, \
+             tag_ids bigint[] NOT NULL DEFAULT '{}', note text)");
+        run("CREATE INDEX ON posts USING gin (tag_ids)");
+        run("SELECT anyfk.add('posts(tag_ids)', 'tags(id)', on_delete => 'scrub')");
+    }
+
+    #[pg_test]
+    fn scrub_is_accepted_and_stored() {
+        scrub_fixture();
+        let m = Spi::get_one::<String>("SELECT on_delete FROM anyfk.constraints")
+            .expect("on_delete")
+            .expect("null");
+        assert_eq!(m, "scrub");
+    }
+
+    #[pg_test]
+    fn scrub_removes_the_key_and_allows_the_delete() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids) VALUES ('{1,2,3}')");
+        run("DELETE FROM tags WHERE id = 2");
+        let a = Spi::get_one::<String>("SELECT tag_ids::text FROM posts")
+            .expect("tag_ids")
+            .expect("null");
+        assert_eq!(a, "{1,3}");
+        assert_eq!(count("SELECT count(*) FROM tags WHERE id = 2"), 0);
+    }
+
+    #[pg_test]
+    fn scrub_keeps_the_row_rather_than_deleting_it() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids, note) VALUES ('{4}', 'keep me')");
+        run("DELETE FROM tags WHERE id = 4");
+        // The row survives with an empty array. scrub is not cascade.
+        assert_eq!(
+            count("SELECT count(*) FROM posts WHERE note = 'keep me'"),
+            1
+        );
+        let a = Spi::get_one::<String>("SELECT tag_ids::text FROM posts")
+            .expect("tag_ids")
+            .expect("null");
+        assert_eq!(a, "{}");
+    }
+
+    #[pg_test]
+    fn scrub_removes_every_occurrence_and_touches_only_matching_rows() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids, note) VALUES ('{5,6,5}', 'dupes')");
+        run("INSERT INTO posts (tag_ids, note) VALUES ('{7,8}', 'untouched')");
+        run("DELETE FROM tags WHERE id = 5");
+        let dupes = Spi::get_one::<String>("SELECT tag_ids::text FROM posts WHERE note = 'dupes'")
+            .expect("tag_ids")
+            .expect("null");
+        assert_eq!(dupes, "{6}");
+        let other =
+            Spi::get_one::<String>("SELECT tag_ids::text FROM posts WHERE note = 'untouched'")
+                .expect("tag_ids")
+                .expect("null");
+        assert_eq!(other, "{7,8}");
+    }
+
+    #[pg_test]
+    fn scrub_leaves_null_arrays_alone() {
+        scrub_fixture();
+        run("ALTER TABLE posts ALTER COLUMN tag_ids DROP NOT NULL");
+        run("INSERT INTO posts (tag_ids, note) VALUES (NULL, 'null row')");
+        run("INSERT INTO posts (tag_ids, note) VALUES ('{9}', 'has nine')");
+        run("DELETE FROM tags WHERE id = 9");
+        assert_eq!(
+            count("SELECT count(*) FROM posts WHERE tag_ids IS NULL AND note = 'null row'"),
+            1
+        );
+    }
+
+    #[pg_test]
+    fn scrub_deleting_an_unreferenced_key_changes_nothing() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids) VALUES ('{1,2}')");
+        run("DELETE FROM tags WHERE id = 10");
+        let a = Spi::get_one::<String>("SELECT tag_ids::text FROM posts")
+            .expect("tag_ids")
+            .expect("null");
+        assert_eq!(a, "{1,2}");
+    }
+
+    #[pg_test(
+        error = "insert or update on table \"posts\" violates foreign key constraint \"posts_tag_ids_anyfk\""
+    )]
+    fn scrub_still_rejects_inserting_a_missing_element() {
+        scrub_fixture();
+        // scrub governs the parent side only; the child check is unchanged.
+        run("INSERT INTO posts (tag_ids) VALUES ('{999}')");
+    }
+
+    // on_delete says nothing about updates, so an UPDATE of a referenced key is
+    // refused whatever the mode.
+    #[pg_test(
+        error = "update or delete on table \"tags\" violates foreign key constraint \"posts_tag_ids_anyfk\" on table \"posts\""
+    )]
+    fn scrub_does_not_apply_to_updating_a_key() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids) VALUES ('{3}')");
+        run("UPDATE tags SET id = 99 WHERE id = 3");
+    }
+
+    #[pg_test]
+    fn scrub_handles_many_rows_in_one_delete() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids) SELECT '{1,2}'::bigint[] FROM generate_series(1,200)");
+        run("DELETE FROM tags WHERE id = 1");
+        assert_eq!(
+            count("SELECT count(*) FROM posts WHERE tag_ids = '{2}'"),
+            200
+        );
+    }
+
+    // The scrub UPDATE runs as the deleting role, so that role needs UPDATE on the
+    // referencing table. We do not elevate for it.
+    #[pg_test(error = "permission denied for table posts")]
+    fn scrub_needs_update_on_the_referencing_table() {
+        scrub_fixture();
+        run("INSERT INTO posts (tag_ids) VALUES ('{1}')");
+        run("CREATE ROLE anyfk_no_update");
+        run("GRANT SELECT, DELETE ON tags TO anyfk_no_update");
+        run("GRANT SELECT ON posts TO anyfk_no_update");
+        run("SET ROLE anyfk_no_update");
+        run("DELETE FROM tags WHERE id = 1");
+    }
+
+    #[pg_test]
+    fn restrict_is_still_the_default() {
+        fixture();
+        let m = Spi::get_one::<String>("SELECT on_delete FROM anyfk.constraints")
+            .expect("on_delete")
+            .expect("null");
+        assert_eq!(m, "restrict");
+    }
+
+    #[pg_test(
+        error = "update or delete on table \"tags\" violates foreign key constraint \"posts_tag_ids_anyfk\" on table \"posts\""
+    )]
+    fn restrict_still_refuses_the_delete() {
+        fixture();
+        run("INSERT INTO posts (tag_ids) VALUES ('{1}')");
+        run("DELETE FROM tags WHERE id = 1");
     }
 
     #[pg_test(error = "existing rows in public.posts violate the constraint")]
