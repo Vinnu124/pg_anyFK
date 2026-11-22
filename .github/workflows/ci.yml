@@ -2,8 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# Keep the latest run on a branch and drop the ones it superseded. The default
+# branch is exempt so every commit there keeps its own result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,9 +30,12 @@ jobs:
       - run: cargo clippy -p pg_anyfk_core --all-targets -- -D warnings
       - run: cargo test -p pg_anyfk_core
 
+  # Four Postgres versions is the expensive half, so it waits for the cheap gate.
+  # A formatting slip should not burn four matrix jobs.
   ext:
     name: ext (pg${{ matrix.pg }})
     runs-on: ubuntu-latest
+    needs: core
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +70,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # Building cargo-pgrx from source is by far the slowest step, and the binary
+      # only changes when PGRX_VERSION does.
+      - name: Cache cargo-pgrx
+        id: pgrx-bin
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-pgrx
+          key: cargo-pgrx-${{ env.PGRX_VERSION }}-${{ runner.os }}
+
       - name: Install cargo-pgrx
+        if: steps.pgrx-bin.outputs.cache-hit != 'true'
         run: cargo install --locked cargo-pgrx@${{ env.PGRX_VERSION }}
 
       - name: cargo pgrx init
