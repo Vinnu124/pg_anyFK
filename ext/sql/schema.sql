@@ -36,6 +36,8 @@ CREATE TABLE anyfk.constraints (
 -- these rows would orphan every trigger we installed.
 SELECT pg_catalog.pg_extension_config_dump('anyfk.constraints', '');
 
+SELECT pg_catalog.pg_extension_config_dump('anyfk.constraints_id_seq', '');
+
 REVOKE ALL ON anyfk.constraints FROM PUBLIC;
 GRANT USAGE ON SCHEMA anyfk TO PUBLIC;
 -- The trigger functions read this table as the writing user, so SELECT must be public.
